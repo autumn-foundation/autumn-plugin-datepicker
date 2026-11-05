@@ -9,8 +9,8 @@ Date, time, date-time and date-range pickers for
 - The server renders the month grid. A month change is one htmx request.
 - The grid keys follow the WAI-ARIA APG date picker dialog. They use the
   Autumn keyboard core.
-- `min`, `max`, disabled weekdays, disabled dates, the week start and the
-  names (from i18n) are supported.
+- The pickers support `min`, `max`, disabled weekdays, disabled dates, the
+  week start and the names (from i18n).
 - Each picker binds to `Changeset<T>` and to `form_for`.
 
 The pack passes the Autumn widget conformance check: the static check, and
@@ -50,7 +50,7 @@ use autumn_web::form::FieldOptions;
 
 let picker = DatePicker::new()
     .rules(DateRules::new().min(today).disable_weekends())
-    .today(today);
+    .time_zone(user_zone);
 date_picker(&changeset, "due", "Due date", &picker, &FieldOptions::new())
 ```
 
@@ -63,7 +63,7 @@ date_picker(&changeset, "due", "Due date", &picker, &FieldOptions::new())
 
 With `form_for`, use `.override_field("due", FieldControl::custom(DatePicker::new()))`.
 
-Read the [guide](docs/guide/datepicker.md) for the keyboard, the i18n keys,
+Read the [guide](https://github.com/autumn-foundation/autumn-plugin-datepicker/blob/main/docs/guide/datepicker.md) for the keyboard, the i18n keys,
 the time zones and the month route.
 
 ## Features

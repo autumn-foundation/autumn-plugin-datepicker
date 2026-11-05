@@ -19,9 +19,21 @@ use crate::locale::CalendarLocale;
 use crate::rules::{DateRules, parse_iso_date, weekday_from_iso};
 use crate::value::{parse_date, parse_datetime};
 
-/// The error for a query that does not parse. The route answers 400.
+/// The longest query the route reads, in bytes. A longer query gets 400.
+pub const MAX_QUERY_BYTES: usize = 16 * 1024;
+
+/// The error for a query that does not parse. The route answers 400. The
+/// message names the key, not the value.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct QueryError(pub String);
+pub struct QueryError(String);
+
+impl QueryError {
+    /// The message.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.0
+    }
+}
 
 impl std::fmt::Display for QueryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -41,6 +53,9 @@ fn bad(message: impl Into<String>) -> QueryError {
 ///
 /// [`QueryError`] when a key is missing or a value does not parse.
 pub fn month_markup(query: &str, locale: &CalendarLocale) -> Result<Markup, QueryError> {
+    if query.len() > MAX_QUERY_BYTES {
+        return Err(bad("the query is too long"));
+    }
     let pairs: Vec<(String, String)> =
         serde_html_form::from_str(query).map_err(|e| bad(format!("query: {e}")))?;
     let get = |key: &str| {
@@ -77,9 +92,9 @@ pub fn month_markup(query: &str, locale: &CalendarLocale) -> Result<Markup, Quer
         .collect();
     let first = values.first().copied().unwrap_or_default();
     let selection = match mode {
-        Mode::Date => parse_date(first).map_or(Selection::None, Selection::Day),
+        Mode::Date => parse_date(first).map_or(Selection::Empty, Selection::Day),
         Mode::DateTime => {
-            parse_datetime(first, None).map_or(Selection::None, |dt| Selection::Day(dt.date()))
+            parse_datetime(first, None).map_or(Selection::Empty, |dt| Selection::Day(dt.date()))
         }
         Mode::Range => Selection::range(
             parse_date(first),
@@ -99,7 +114,7 @@ pub fn month_markup(query: &str, locale: &CalendarLocale) -> Result<Markup, Quer
 /// The text of the month route when the request has no i18n bundle. The
 /// plugin puts it in the app state.
 #[derive(Debug, Clone, Default)]
-pub struct RouteLocale(pub CalendarLocale);
+pub(crate) struct RouteLocale(pub(crate) CalendarLocale);
 
 fn plugin_locale(state: &AppState) -> CalendarLocale {
     state
@@ -109,12 +124,21 @@ fn plugin_locale(state: &AppState) -> CalendarLocale {
 
 fn respond(query: Option<&str>, locale: &CalendarLocale) -> Response {
     match month_markup(query.unwrap_or_default(), locale) {
-        Ok(markup) => ([(header::CACHE_CONTROL, "private, max-age=300")], markup).into_response(),
+        // With `i18n`, the text follows the request locale: the header or a cookie.
+        Ok(markup) => (
+            [
+                (header::CACHE_CONTROL, "private, max-age=300"),
+                (header::VARY, "Accept-Language, Cookie"),
+            ],
+            markup,
+        )
+            .into_response(),
         Err(err) => (StatusCode::BAD_REQUEST, err.0).into_response(),
     }
 }
 
-/// The request bundle wins. Without one, the plugin text applies.
+/// With a request bundle, the route uses its text. Without one, the route
+/// uses the plugin text.
 #[cfg(feature = "i18n")]
 #[autumn_web::get("/_datepicker/month")]
 async fn month(

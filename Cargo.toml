@@ -39,8 +39,12 @@ i18n = ["autumn-web/i18n"]
 # Browser tests (Chromium): keyboard, axe and widget pack conformance.
 system-tests = ["autumn-web/system-tests"]
 
+[package.metadata.docs.rs]
+features = ["i18n"]
+
 [lints.rust]
 unsafe_code = "forbid"
+missing_docs = "warn"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }

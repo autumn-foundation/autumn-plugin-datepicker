@@ -60,7 +60,7 @@ fn render_datetime<T: Serialize>(at: T, picker: &DateTimePicker) -> String {
 }
 
 fn picker() -> DateTimePicker {
-    DateTimePicker::new().date(DatePicker::new().today(NaiveDate::MIN))
+    DateTimePicker::new().calendar(DatePicker::new().today(NaiveDate::MIN))
 }
 
 #[derive(Deserialize)]
@@ -109,10 +109,10 @@ struct Times {
     at: NaiveTime,
 }
 
-/// Instants from 1970 to 2100, with millisecond fractions one time in four.
+/// Instants from 1900 to 2100, with millisecond fractions one time in four.
 fn instant() -> impl Strategy<Value = DateTime<Utc>> {
     (
-        0_i64..4_102_444_800,
+        -2_208_988_800_i64..4_102_444_800,
         prop_oneof![3 => Just(0_u32), 1 => 0_u32..1000],
     )
         .prop_map(|(secs, millis)| {
@@ -209,6 +209,14 @@ proptest! {
             &TimePicker::new(), &FieldOptions::new()).into_string();
         prop_assert_eq!(post::<Times>(&value_of(&html, "at")).at, t);
     }
+}
+
+/// An empty post reads as `None` in each `_option` deserializer.
+#[test]
+fn an_empty_value_reads_as_none() {
+    assert_eq!(post::<UtcOptions>("").at, None);
+    assert_eq!(post::<LocalOptions>("").at, None);
+    assert_eq!(post::<NaiveOptions>("").at, None);
 }
 
 /// The fall-back hour, named: 01:30 EDT and 01:30 EST share one wall clock.

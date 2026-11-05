@@ -26,7 +26,8 @@ A widget pack for Autumn (`autumn-web` 0.10). See `README.md` and
 - JS date math uses UTC only (`setUTCFullYear`, `getUTC*`).
 - The JS handles only the grid keys that the core does not have. See
   `docs/adr/0001-server-grid-and-keyboard-split.md`.
-- Each route query key starts with `dp-`.
+- Each query key that the plugin writes starts with `dp-`. The field values
+  keep their field names.
 - Comments and docs are short, in ASD-STE100 style.
 - No `unwrap()` in `src/` outside tests.
 

@@ -21,15 +21,17 @@ The grid can also come from the server or from JavaScript.
    route reads all state from the query string.
 2. The grid uses the core for the roving tab stop, ArrowLeft/ArrowRight,
    focus tracking and `aria-expanded`.
-3. `datepicker.js` handles only ArrowUp/ArrowDown, PageUp/PageDown,
-   Shift+PageUp/PageDown, Home/End and the month edge. It listens in the
-   capture phase and calls `preventDefault`, so the core skips those keys.
+3. This is an exception to the contract rule "no arrow-key code". The
+   core has no grid mode, so `datepicker.js` handles only ArrowUp/ArrowDown,
+   PageUp/PageDown, Shift+PageUp/PageDown, Home/End and the month edge. It
+   listens in the capture phase and calls `preventDefault`, so the core
+   skips those keys.
 4. The script does date math in UTC only.
 
 ## Consequences
 
-- One renderer: no DST bugs from local-time JavaScript, and the server
-  tests cover the grid.
+- One renderer. The server tests cover the grid. The script uses UTC, so a
+  DST change cannot move a day.
 - The pack script has key code. A future core grid mode
   (`data-autumn-orientation="grid"`) can replace it. That is a change in
   `autumn-web`, not in this crate.

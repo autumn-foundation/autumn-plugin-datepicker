@@ -19,8 +19,8 @@ pub fn parse_date(raw: &str) -> Option<NaiveDate> {
 /// Read a wall-clock date and time from a changeset value.
 ///
 /// Accepts `YYYY-MM-DDTHH:MM[:SS[.f]]`, the same with a space, and RFC 3339.
-/// With `zone`, an RFC 3339 instant shows as the wall clock in `zone`.
-/// Without `zone`, it shows as the wall clock of its own offset, as
+/// With `zone`, the result for an RFC 3339 instant is the wall clock in
+/// `zone`. Without `zone`, the result is the wall clock of its own offset, as
 /// `autumn_web::form::datetime_input` does.
 #[must_use]
 pub fn parse_datetime(raw: &str, zone: Option<Tz>) -> Option<NaiveDateTime> {
@@ -50,18 +50,22 @@ pub fn parse_time(raw: &str) -> Option<NaiveTime> {
 }
 
 /// Write a `datetime-local` value: `YYYY-MM-DDTHH:MM`, then `:SS` and the
-/// fraction only when they are not zero.
+/// milliseconds only when they are not zero. See [`format_time`].
 #[must_use]
 pub fn format_datetime(value: NaiveDateTime) -> String {
     format!("{}T{}", value.date(), format_time(value.time()))
 }
 
-/// Write a `time` value: `HH:MM`, then `:SS` and the fraction only when they
-/// are not zero.
+/// Write a `time` value: `HH:MM`, then `:SS` and the milliseconds only when
+/// they are not zero.
+///
+/// HTML allows at most three fraction digits, so the value drops the time
+/// below one millisecond. Without that, a browser can clear the input.
 #[must_use]
 pub fn format_time(value: NaiveTime) -> String {
-    if value.nanosecond() != 0 {
-        value.format("%H:%M:%S%.f").to_string()
+    let millis = value.nanosecond() / 1_000_000;
+    if millis != 0 {
+        value.format("%H:%M:%S%.3f").to_string()
     } else if value.second() != 0 {
         value.format("%H:%M:%S").to_string()
     } else {
@@ -73,8 +77,8 @@ pub fn format_time(value: NaiveTime) -> String {
 ///
 /// Accepts `YYYY-MM-DDTHH:MM[:SS[.f]]`. A wall clock that a DST change
 /// repeats gives the earlier instant. A wall clock in a DST gap gives
-/// `None`. `autumn_web::time_zone::parse_local_datetime` does the same for
-/// whole minutes.
+/// `None`. `autumn_web::time_zone::parse_local_datetime` gives the same
+/// result, but it reads whole minutes only.
 #[must_use]
 pub fn parse_in_zone(raw: &str, zone: Tz) -> Option<DateTime<Utc>> {
     let wall = parse_wall_clock(raw.trim())?;
@@ -277,6 +281,19 @@ mod tests {
             format_datetime(d.and_hms_milli_opt(9, 5, 7, 250).expect("t")),
             "2026-11-05T09:05:07.250"
         );
+    }
+
+    #[test]
+    fn the_fraction_stops_at_milliseconds() {
+        let d = date(2026, 11, 5);
+        let t = |nanos| d.and_hms_nano_opt(14, 0, 7, nanos).expect("t");
+        assert_eq!(format_datetime(t(123_456_789)), "2026-11-05T14:00:07.123");
+        assert_eq!(
+            format_datetime(t(999_999)),
+            "2026-11-05T14:00:07",
+            "below 1 ms"
+        );
+        assert_eq!(format_time(t(5_000_000).time()), "14:00:07.005");
     }
 
     #[test]

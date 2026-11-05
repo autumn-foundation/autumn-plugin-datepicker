@@ -4,14 +4,15 @@
 //! the toggle button, which opens a calendar or a time list in a native
 //! popover.
 
-use chrono::{NaiveDate, NaiveTime, Timelike};
+use chrono::format::{Item, StrftimeItems};
+use chrono::{DateTime, NaiveDate, NaiveTime, Timelike, Utc};
 use chrono_tz::Tz;
 use maud::{Markup, html};
 use serde::Serialize;
 
 use autumn_web::form::{Changeset, FieldContext, FieldOptions, FieldRenderer, custom_input_with};
 
-use crate::calendar::{Calendar, Mode, Selection};
+use crate::calendar::{Calendar, Mode, Selection, is_valid_id};
 use crate::grid::MonthGrid;
 use crate::locale::CalendarLocale;
 use crate::rules::DateRules;
@@ -44,11 +45,13 @@ pub struct DatePicker {
     pub(crate) rules: DateRules,
     pub(crate) locale: CalendarLocale,
     pub(crate) today: Option<NaiveDate>,
+    pub(crate) zone: Option<Tz>,
     pub(crate) inline: bool,
 }
 
 impl DatePicker {
-    /// No limits, English, today from the ambient clock (UTC).
+    /// A picker with no limits and English text. Today comes from the
+    /// ambient clock, in UTC.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -90,6 +93,13 @@ impl DatePicker {
         self
     }
 
+    /// Use `zone` for today when [`today`](Self::today) is not set.
+    #[must_use]
+    pub const fn time_zone(mut self, zone: Tz) -> Self {
+        self.zone = Some(zone);
+        self
+    }
+
     /// Show the calendar below the input, not in a popover.
     #[must_use]
     pub const fn inline(mut self) -> Self {
@@ -98,16 +108,19 @@ impl DatePicker {
     }
 }
 
+/// The date of `now` in `zone`, or in UTC.
+pub(crate) fn today_from(now: DateTime<Utc>, zone: Option<Tz>) -> NaiveDate {
+    zone.map_or_else(
+        || now.date_naive(),
+        |tz| now.with_timezone(&tz).date_naive(),
+    )
+}
+
 impl DatePicker {
-    /// Today: the set date, else the ambient clock in `zone`, else UTC.
-    fn today_in(&self, zone: Option<Tz>) -> NaiveDate {
-        self.today.unwrap_or_else(|| {
-            let now = autumn_web::time::ambient_now();
-            zone.map_or_else(
-                || now.date_naive(),
-                |tz| now.with_timezone(&tz).date_naive(),
-            )
-        })
+    /// Today: the set date, else the ambient clock in the zone, else in UTC.
+    fn today_in(&self) -> NaiveDate {
+        self.today
+            .unwrap_or_else(|| today_from(autumn_web::time::ambient_now(), self.zone))
     }
 
     /// The first month to show: the one of `anchor`, else of today, moved
@@ -123,16 +136,19 @@ impl DatePicker {
         MonthGrid::containing(day, self.locale.first_weekday())
     }
 
-    /// The calendar, in a popover or inline.
-    fn calendar(
+    /// The calendar, in a popover or inline. An id that the month route
+    /// does not accept gives no calendar: the native input stays alone.
+    fn calendar_markup(
         &self,
         id: &str,
         selection: Selection,
         anchor: Option<NaiveDate>,
         mode: Mode,
-        zone: Option<Tz>,
     ) -> Markup {
-        let today = self.today_in(zone);
+        if !is_valid_id(id) {
+            return html! {};
+        }
+        let today = self.today_in();
         let calendar = Calendar::new(
             id,
             self.first_month(anchor, today),
@@ -143,9 +159,13 @@ impl DatePicker {
         .today(today)
         .mode(mode)
         .render();
+        // One live region. It is outside the calendar that htmx replaces.
+        let status = html! {
+            div class="autumn-datepicker-status" role="status" aria-live="polite" {}
+        };
         if self.inline {
             return html! {
-                div class="autumn-datepicker-inline" hidden { (calendar) }
+                div class="autumn-datepicker-inline" hidden { (status) (calendar) }
             };
         }
         let dialog = format!("{id}-dialog");
@@ -154,6 +174,7 @@ impl DatePicker {
             div id=(dialog) class="autumn-popover__panel autumn-datepicker-dialog" popover
                 role="dialog" aria-label=(self.locale.calendar())
                 data-side="bottom" data-align="start" data-autumn-popover {
+                (status)
                 (calendar)
             }
         }
@@ -188,12 +209,12 @@ impl FieldRenderer for DatePicker {
         ];
         attrs.extend(value.map(|v| ("value", v)));
         attrs.extend(self.limits("", ""));
-        let selection = selected.map_or(Selection::None, Selection::Day);
+        let selection = selected.map_or(Selection::Empty, Selection::Day);
         html! {
             div class="autumn-datepicker-field" data-autumn-datepicker="date"
                 data-autumn-datepicker-inline[self.inline] {
                 (field.control("input", &borrowed(&attrs), html! {}))
-                (self.calendar(field.id(), selection, selected, Mode::Date, None))
+                (self.calendar_markup(field.id(), selection, selected, Mode::Date))
             }
         }
     }
@@ -219,6 +240,9 @@ pub struct TimePicker {
     pub(crate) step_minutes: u32,
     pub(crate) label_format: &'static str,
     pub(crate) locale: CalendarLocale,
+    /// `true` after [`between`](TimePicker::between). Only then does the
+    /// input get `min` and `max`.
+    pub(crate) limited: bool,
 }
 
 impl Default for TimePicker {
@@ -229,6 +253,7 @@ impl Default for TimePicker {
             step_minutes: 30,
             label_format: "%H:%M",
             locale: CalendarLocale::english(),
+            limited: false,
         }
     }
 }
@@ -241,10 +266,19 @@ impl TimePicker {
     }
 
     /// The first and the last slot. The input gets `min` and `max` too.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `first` is after `last`. A list cannot go past midnight.
     #[must_use]
-    pub const fn range(mut self, first: NaiveTime, last: NaiveTime) -> Self {
+    pub fn between(mut self, first: NaiveTime, last: NaiveTime) -> Self {
+        assert!(
+            first <= last,
+            "TimePicker::between: {first} is after {last}; a list cannot go past midnight"
+        );
         self.first = first;
         self.last = last;
+        self.limited = true;
         self
     }
 
@@ -265,8 +299,16 @@ impl TimePicker {
 
     /// The `chrono` format of a slot label, for example `"%-I:%M %p"`. The
     /// input value stays `HH:MM`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `format` is not a valid `chrono` format.
     #[must_use]
-    pub const fn label_format(mut self, format: &'static str) -> Self {
+    pub fn label_format(mut self, format: &'static str) -> Self {
+        assert!(
+            !StrftimeItems::new(format).any(|item| matches!(item, Item::Error)),
+            "TimePicker::label_format: {format:?} is not a valid chrono format"
+        );
         self.label_format = format;
         self
     }
@@ -331,8 +373,10 @@ impl FieldRenderer for TimePicker {
             ("class", INPUT_CLASS.to_owned()),
         ];
         attrs.extend(value.map(|v| ("value", v)));
-        attrs.push(("min", format_time(self.first)));
-        attrs.push(("max", format_time(self.last)));
+        if self.limited {
+            attrs.push(("min", format_time(self.first)));
+            attrs.push(("max", format_time(self.last)));
+        }
         attrs.push(("step", "any".to_owned()));
         html! {
             div class="autumn-datepicker-field" data-autumn-datepicker="time" {
@@ -373,7 +417,7 @@ impl DateTimePicker {
 
     /// Set the calendar part.
     #[must_use]
-    pub fn date(mut self, date: DatePicker) -> Self {
+    pub fn calendar(mut self, date: DatePicker) -> Self {
         self.date = date;
         self
     }
@@ -385,11 +429,21 @@ impl DateTimePicker {
         self
     }
 
-    /// Show an RFC 3339 value as the wall clock in `zone`. Read the post back
-    /// with `autumn_web::time_zone::parse_local_datetime(value, zone)`.
+    /// Set the text of the calendar and the time list.
+    #[must_use]
+    pub fn locale(mut self, locale: CalendarLocale) -> Self {
+        self.time.locale = locale.clone();
+        self.date.locale = locale;
+        self
+    }
+
+    /// Show an RFC 3339 value as the wall clock in `zone`. Today also uses
+    /// `zone`. Read the post back with
+    /// [`parse_in_zone`](crate::value::parse_in_zone).
     #[must_use]
     pub const fn time_zone(mut self, zone: Tz) -> Self {
         self.zone = Some(zone);
+        self.date.zone = Some(zone);
         self
     }
 }
@@ -409,15 +463,15 @@ impl FieldRenderer for DateTimePicker {
             ("class", INPUT_CLASS.to_owned()),
         ];
         attrs.extend(value.map(|v| ("value", v)));
-        attrs.extend(self.date.limits("T00:00", "T23:59:59"));
+        attrs.extend(self.date.limits("T00:00", "T23:59:59.999"));
         attrs.push(("step", "any".to_owned()));
         let day = current.map(|dt| dt.date());
-        let selection = day.map_or(Selection::None, Selection::Day);
+        let selection = day.map_or(Selection::Empty, Selection::Day);
         html! {
             div class="autumn-datepicker-field" data-autumn-datepicker="datetime"
                 data-autumn-datepicker-inline[self.date.inline] {
                 (field.control("input", &borrowed(&attrs), html! {}))
-                (self.date.calendar(field.id(), selection, day, Mode::DateTime, self.zone))
+                (self.date.calendar_markup(field.id(), selection, day, Mode::DateTime))
                 (self.time.list(field.id(), current.map(|dt| dt.time())))
             }
         }
@@ -445,7 +499,7 @@ pub struct DateRangePicker {
 }
 
 impl DateRangePicker {
-    /// No limits, English.
+    /// A picker with no limits and English text.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -453,7 +507,7 @@ impl DateRangePicker {
 
     /// Set the calendar: rules, locale, today and inline mode.
     #[must_use]
-    pub fn date(mut self, date: DatePicker) -> Self {
+    pub fn calendar(mut self, date: DatePicker) -> Self {
         self.date = date;
         self
     }
@@ -500,7 +554,7 @@ impl FieldRenderer for DateRangePicker {
                     (input("start", locale.range_start(), part(0)))
                     (input("end", locale.range_end(), part(1)))
                 }
-                (self.date.calendar(field.id(), selection, start.or(end), Mode::Range, None))
+                (self.date.calendar_markup(field.id(), selection, start.or(end), Mode::Range))
             }
         }
     }
@@ -516,4 +570,50 @@ pub fn date_range_picker<T: Serialize>(
     options: &FieldOptions<'_>,
 ) -> Markup {
     custom_input_with(changeset, field, label, picker, options)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn today_uses_the_zone_across_midnight_and_dst() {
+        // 04:30 UTC on 8 March 2026 is 23:30 EST on 7 March.
+        let now = Utc
+            .with_ymd_and_hms(2026, 3, 8, 4, 30, 0)
+            .single()
+            .expect("t");
+        let ny = chrono_tz::America::New_York;
+        assert_eq!(
+            today_from(now, None),
+            NaiveDate::from_ymd_opt(2026, 3, 8).expect("d")
+        );
+        assert_eq!(
+            today_from(now, Some(ny)),
+            NaiveDate::from_ymd_opt(2026, 3, 7).expect("d")
+        );
+        // 04:30 UTC on 9 March is 00:30 EDT: DST started on 8 March.
+        let after = Utc
+            .with_ymd_and_hms(2026, 3, 9, 4, 30, 0)
+            .single()
+            .expect("t");
+        assert_eq!(
+            today_from(after, Some(ny)),
+            NaiveDate::from_ymd_opt(2026, 3, 9).expect("d")
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "past midnight")]
+    fn an_overnight_time_range_panics() {
+        let t = |h| NaiveTime::from_hms_opt(h, 0, 0).expect("t");
+        let _ = TimePicker::new().between(t(22), t(2));
+    }
+
+    #[test]
+    #[should_panic(expected = "not a valid chrono format")]
+    fn a_bad_label_format_panics() {
+        let _ = TimePicker::new().label_format("%Q");
+    }
 }

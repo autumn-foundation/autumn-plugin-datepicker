@@ -10,6 +10,10 @@
 (function () {
   'use strict';
 
+  // Install one time, even when the script loads two times.
+  if (window.__autumnDatepicker) return;
+  window.__autumnDatepicker = true;
+
   var DAY = 86400000;
   var FIELD = '[data-autumn-datepicker]';
   var CALENDAR = '[data-autumn-datepicker-calendar]';
@@ -17,7 +21,9 @@
   var DIALOG = '.autumn-datepicker-dialog';
 
   var ready = new WeakSet();
-  var pending = new WeakMap(); // field -> { date, step } or { nav }, after a swap
+  var pending = new WeakMap(); // field -> { date, step, reload } or { nav }, after a swap
+  var loading = new WeakMap(); // field -> the calendar that an open request replaces
+  var shownMonth = new WeakMap(); // field -> the month on screen, for the live region
   var rangeStart = new WeakMap(); // field -> start date, while the user picks the end
 
   // ── Dates (`YYYY-MM-DD` strings, UTC milliseconds) ──────────────────────
@@ -93,7 +99,7 @@
 
   function toggleOf(dialog) {
     var id = dialog.id && CSS.escape(dialog.id);
-    return id ? document.querySelector('[aria-controls="' + id + '"]') : null;
+    return id ? document.querySelector('[aria-controls~="' + id + '"]') : null;
   }
 
   function setValue(input, value) {
@@ -109,6 +115,15 @@
     var value = (inputs(field)[0] || {}).value || '';
     var day = value.slice(0, 10);
     return isDate(day) ? day : null;
+  }
+
+  // The values of a range: [start, end]. A lone end acts as the start.
+  function rangeValues(field) {
+    var list = inputs(field);
+    var a = list[0] && isDate(list[0].value) ? list[0].value : '';
+    var b = list[1] && isDate(list[1].value) ? list[1].value : '';
+    if (!a) return [b, b];
+    return [a, b || a];
   }
 
   // Mark the days from `start` to `end` as selected.
@@ -128,15 +143,29 @@
 
   // ── Month changes (htmx) ─────────────────────────────────────────────────
 
+  // Load the month of `iso`. Return false when htmx is not on the page.
   function load(field, cal, iso, focus) {
-    if (!window.htmx || !cal.isConnected) return;
-    pending.set(field, focus);
+    if (!window.htmx || !cal.isConnected) return false;
+    if (focus) pending.set(field, focus);
+    else pending.delete(field);
+    loading.set(field, cal);
     var params = new URLSearchParams();
     inputs(field).forEach(function (input) {
       if (input.name) params.append(input.name, input.value);
     });
     var url = cal.getAttribute('data-src') + '&dp-month=' + iso.slice(0, 7) + '&' + params;
-    window.htmx.ajax('GET', url, { target: cal, swap: 'outerHTML' });
+    var done = function () {
+      // htmx does not swap an error response. Then the old grid stays.
+      setTimeout(function () {
+        if (!cal.isConnected || loading.get(field) !== cal) return;
+        loading.delete(field);
+        pending.delete(field);
+        focusStop(cal);
+      }, 0);
+    };
+    var request = window.htmx.ajax('GET', url, { target: cal, swap: 'outerHTML' });
+    if (request && request.then) request.then(done, done);
+    return true;
   }
 
   // Focus `iso`. A disabled day moves on by `step` days. A day outside the
@@ -145,10 +174,7 @@
     var target = clamp(cal, iso);
     for (var i = 0; i < 400; i++) {
       var td = cellOf(cal, target);
-      if (!td) {
-        if (mayLoad) load(field, cal, target, { date: target, step: step });
-        return !!mayLoad;
-      }
+      if (!td) return mayLoad && load(field, cal, target, { date: target, step: step });
       if (enabled(td)) {
         td.focus();
         return true;
@@ -161,26 +187,66 @@
     return false;
   }
 
+  // The day that holds the tab stop: the first selected day, else today,
+  // else the first enabled day.
+  function stopOf(cal) {
+    var open = '[data-date]:not([aria-disabled="true"])';
+    return cal.querySelector(open + '[aria-selected="true"]') ||
+      cal.querySelector(open + '[aria-current="date"]') || cal.querySelector(open);
+  }
+
   function focusStop(cal) {
-    var stop = cal.querySelector('[data-date][tabindex="0"]') ||
-      cal.querySelector('[data-date]:not([aria-disabled="true"])');
+    var stop = stopOf(cal);
     if (stop) stop.focus();
   }
 
-  // After a swap: focus what the key or the button asked for.
+  // The keyboard core puts the tab stop on the first selected or current
+  // day in DOM order. Put it on the selected day, as the server does.
+  function setStop(cal) {
+    var stop = stopOf(cal);
+    if (!stop) return;
+    cal.querySelectorAll('[data-date]').forEach(function (td) {
+      td.tabIndex = td === stop ? 0 : -1;
+    });
+  }
+
+  // Say the new month in the live region, which htmx does not replace.
+  function announce(field, cal) {
+    var month = cal.getAttribute('data-month');
+    var before = shownMonth.get(field);
+    shownMonth.set(field, month);
+    var status = field.querySelector('.autumn-datepicker-status');
+    var heading = cal.querySelector('.autumn-datepicker-heading');
+    if (before && before !== month && status && heading) status.textContent = heading.textContent;
+  }
+
+  // A month button needs htmx. Without it, the button does nothing.
+  function disableNavWithoutHtmx(cal) {
+    if (window.htmx) return;
+    cal.querySelectorAll('[data-nav]').forEach(function (button) { button.disabled = true; });
+  }
+
+  // A new calendar (page load or swap): mark a half-picked range, fix the
+  // tab stop and focus what the key or the button asked for.
   function restore(field, cal) {
+    if (loading.has(field) && !loading.get(field).isConnected) loading.delete(field);
+    var start = rangeStart.get(field);
+    if (start && cal.getAttribute('data-mode') === 'range') mark(cal, start, start);
+    disableNavWithoutHtmx(cal);
+    announce(field, cal);
     var want = pending.get(field);
-    if (!want) return;
     pending.delete(field);
-    // The keyboard core picks the tab stop after `autumn:init`. Focus after it.
+    // The keyboard core sets the tab stop after `autumn:init`. Act after it.
     setTimeout(function () {
+      setStop(cal);
+      if (!want) return;
       if (want.nav) {
-        var button = cal.querySelector('[data-nav="' + want.nav + '"]');
+        var button = cal.querySelector('[data-nav="' + CSS.escape(want.nav) + '"]');
         if (button && !button.disabled) button.focus();
         else focusStop(cal);
         return;
       }
-      if (!focusDate(field, cal, want.date, want.step, false)) focusStop(cal);
+      if (!focusDate(field, cal, want.date, want.step, !!want.reload)) focusStop(cal);
     }, 0);
   }
 
@@ -206,9 +272,8 @@
     if (mode === 'range') {
       var start = rangeStart.get(field);
       if (!start) {
+        // Mark the start only. Escape then keeps the old range.
         rangeStart.set(field, iso);
-        setValue(list[0], iso);
-        setValue(list[1], '');
         mark(cal, iso, iso);
         td.focus();
         return;
@@ -252,12 +317,21 @@
 
   function openCalendar(field, cal) {
     rangeStart.delete(field);
+    disableNavWithoutHtmx(cal);
     var wanted = wantedDate(field);
-    if (wanted && wanted.slice(0, 7) !== cal.getAttribute('data-month')) {
-      load(field, cal, wanted, { date: wanted, step: 0 });
+    var range = cal.getAttribute('data-mode') === 'range';
+    if (range) wanted = rangeValues(field)[0] || null;
+    if (wanted && wanted.slice(0, 7) !== cal.getAttribute('data-month') &&
+        load(field, cal, wanted, { date: wanted, step: 0 })) {
       return;
     }
-    if (wanted && cal.getAttribute('data-mode') !== 'range') mark(cal, wanted, wanted);
+    if (range) {
+      var values = rangeValues(field);
+      mark(cal, values[0], values[1]);
+    } else if (wanted) {
+      mark(cal, wanted, wanted);
+    }
+    setStop(cal);
     if (!(wanted && focusDate(field, cal, wanted, 0, false))) focusStop(cal);
   }
 
@@ -298,7 +372,11 @@
   document.addEventListener('autumn:init', function (e) {
     var root = e.target;
     if (!root.querySelectorAll) return;
-    each(root, FIELD, setUp);
+    each(root, FIELD, function (field) {
+      setUp(field);
+      var cal = field.querySelector(CALENDAR);
+      if (cal && !shownMonth.has(field)) shownMonth.set(field, cal.getAttribute('data-month'));
+    });
     each(root, CALENDAR, function (cal) {
       var field = fieldOf(cal);
       if (field) restore(field, cal);
@@ -357,16 +435,27 @@
     var iso = td.getAttribute('data-date');
     var target;
     var step;
+    var row = td.parentElement.querySelectorAll('[data-date]');
+    // A key during a month request moves on from the date it asked for.
+    var queued = loading.has(field) && pending.get(field);
+    if (queued && queued.date && e.key !== 'Enter' && e.key !== ' ') {
+      iso = queued.date;
+      if (e.key === 'Home' || e.key === 'End') {
+        e.preventDefault();
+        return;
+      }
+    }
     switch (e.key) {
       case 'Enter':
       case ' ':
         e.preventDefault();
-        pickDate(field, td);
+        if (!e.repeat) pickDate(field, td);
         return;
       case 'ArrowUp': target = addDays(iso, -7); step = -1; break;
       case 'ArrowDown': target = addDays(iso, 7); step = 1; break;
-      case 'Home': target = addDays(iso, -td.cellIndex); step = 1; break;
-      case 'End': target = addDays(iso, 6 - td.cellIndex); step = -1; break;
+      // The first and the last day of this week in this month.
+      case 'Home': target = row[0].getAttribute('data-date'); step = 1; break;
+      case 'End': target = row[row.length - 1].getAttribute('data-date'); step = -1; break;
       case 'PageUp': target = addMonths(iso, e.shiftKey ? -12 : -1); step = -1; break;
       case 'PageDown': target = addMonths(iso, e.shiftKey ? 12 : 1); step = 1; break;
       case 'ArrowLeft':
@@ -376,7 +465,7 @@
         var days = Array.prototype.filter.call(cal.querySelectorAll('[data-date]'), enabled);
         var index = days.indexOf(td);
         // The keyboard core moves inside the grid. Only the month edge is ours.
-        if (forward ? index < days.length - 1 : index > 0) return;
+        if (!queued && (forward ? index < days.length - 1 : index > 0)) return;
         target = addDays(iso, forward ? 1 : -1);
         step = forward ? 1 : -1;
         break;
@@ -386,6 +475,10 @@
     }
     e.preventDefault();
     if (clamp(cal, target) === iso) return;
+    if (queued && queued.date) {
+      pending.set(field, { date: clamp(cal, target), step: step, reload: true });
+      return;
+    }
     focusDate(field, cal, target, step, true);
   }, true);
 
@@ -399,15 +492,18 @@
     dialog.hidePopover();
   });
 
-  // A typed value moves an inline calendar to its month.
+  // A typed value moves an inline calendar to its month. A change that this
+  // script fires is not trusted, and needs nothing.
   document.addEventListener('change', function (e) {
     var input = e.target;
-    if (!input.matches || !input.matches('input.autumn-datepicker-input')) return;
+    if (!e.isTrusted || !input.matches || !input.matches('input.autumn-datepicker-input')) return;
     var field = fieldOf(input);
     var cal = field && field.querySelector('.autumn-datepicker-inline ' + CALENDAR);
     var wanted = field && wantedDate(field);
     if (!cal || !wanted) return;
+    if (cal.getAttribute('data-mode') === 'range') wanted = rangeValues(field)[0] || wanted;
     if (wanted.slice(0, 7) !== cal.getAttribute('data-month')) load(field, cal, wanted, null);
-    else if (cal.getAttribute('data-mode') !== 'range') mark(cal, wanted, wanted);
+    else if (cal.getAttribute('data-mode') === 'range') mark(cal, rangeValues(field)[0], rangeValues(field)[1]);
+    else mark(cal, wanted, wanted);
   });
 })();

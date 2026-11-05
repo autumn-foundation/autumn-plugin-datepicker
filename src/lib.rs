@@ -22,7 +22,7 @@
 //! # let _ = html;
 //! ```
 //!
-//! See `docs/guide/datepicker.md`.
+//! See the [guide](https://github.com/autumn-foundation/autumn-plugin-datepicker/blob/main/docs/guide/datepicker.md).
 
 use std::borrow::Cow;
 
@@ -41,7 +41,7 @@ pub mod widgets;
 
 pub use calendar::{Calendar, MONTH_PATH, Mode, Selection};
 pub use grid::{MonthGrid, days_in_month};
-pub use locale::CalendarLocale;
+pub use locale::{CalendarLocale, Label};
 pub use pack::{ASSETS, pack};
 pub use rules::{DateRules, MAX_DISABLED_DATES};
 pub use value::DateRange;
@@ -60,7 +60,7 @@ pub struct DatepickerPlugin {
 }
 
 impl DatepickerPlugin {
-    /// English text for the month route.
+    /// A plugin with English text for the month route.
     #[must_use]
     pub fn new() -> Self {
         Self::default()

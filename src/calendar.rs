@@ -14,16 +14,18 @@ use crate::value::DateRange;
 /// The path of the month route.
 pub const MONTH_PATH: &str = "/_datepicker/month";
 
-/// The prefix of each month route key. A form field whose name starts with
-/// it cannot use a picker: `hx-include` sends the field under its name.
+/// The prefix of each month route key.
+///
+/// `hx-include` sends each input under its field name. Thus a field name
+/// that starts with this prefix cannot use a picker.
 pub const QUERY_PREFIX: &str = "dp-";
 
 /// What the calendar marks as selected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Selection {
-    /// Nothing.
+    /// No day.
     #[default]
-    None,
+    Empty,
     /// One day.
     Day(NaiveDate),
     /// A range. The end is `None` while the user picks it.
@@ -37,7 +39,7 @@ impl Selection {
         match (start, end) {
             (Some(a), b) => Self::Range(a, b),
             (None, Some(b)) => Self::Range(b, None),
-            (None, None) => Self::None,
+            (None, None) => Self::Empty,
         }
     }
 }
@@ -68,13 +70,34 @@ impl Mode {
     /// Parse [`as_str`](Self::as_str).
     #[must_use]
     pub fn parse(name: &str) -> Option<Self> {
-        [Self::Date, Self::DateTime, Self::Range]
-            .into_iter()
-            .find(|mode| mode.as_str() == name)
+        name.parse().ok()
     }
 }
 
-/// One month of a picker, ready to render.
+impl std::str::FromStr for Mode {
+    type Err = UnknownMode;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        [Self::Date, Self::DateTime, Self::Range]
+            .into_iter()
+            .find(|mode| mode.as_str() == name)
+            .ok_or(UnknownMode)
+    }
+}
+
+/// The error for a mode name that is not `date`, `datetime` or `range`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnknownMode;
+
+impl std::fmt::Display for UnknownMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the mode is not date, datetime or range")
+    }
+}
+
+impl std::error::Error for UnknownMode {}
+
+/// The calendar of one month for one picker.
 #[derive(Debug, Clone)]
 pub struct Calendar<'a> {
     id: &'a str,
@@ -100,7 +123,7 @@ impl<'a> Calendar<'a> {
             month,
             rules,
             locale,
-            selection: Selection::None,
+            selection: Selection::Empty,
             today: None,
             mode: Mode::Date,
         }
@@ -113,7 +136,7 @@ impl<'a> Calendar<'a> {
         self
     }
 
-    /// Mark today with `aria-current="date"`.
+    /// Set today. Its cell gets `aria-current="date"`.
     #[must_use]
     pub const fn today(mut self, today: NaiveDate) -> Self {
         self.today = Some(today);
@@ -152,7 +175,7 @@ impl<'a> Calendar<'a> {
     /// `true` when `day` is in the selection.
     fn is_selected(&self, day: NaiveDate) -> bool {
         match self.selection {
-            Selection::None => false,
+            Selection::Empty => false,
             Selection::Day(d) => d == day,
             Selection::Range(start, None) => start == day,
             Selection::Range(start, Some(end)) => DateRange::new(start, end).contains(day),
@@ -174,13 +197,6 @@ impl<'a> Calendar<'a> {
             .or_else(|| days().next())
     }
 
-    /// `true` when today gets `aria-current`: no day of this month is selected.
-    fn marks_today(&self) -> bool {
-        !(1..=self.month.days())
-            .filter_map(|d| self.month.first().with_day(d))
-            .any(|d| self.is_selected(d))
-    }
-
     /// Render the calendar.
     #[must_use]
     pub fn render(&self) -> Markup {
@@ -188,9 +204,10 @@ impl<'a> Calendar<'a> {
         let heading = format!("{id}-calendar-heading");
         let src = self.source_url();
         let stop = self.tab_stop();
-        let marks_today = self.marks_today();
         let nav = |label: &str, target: Option<MonthGrid>, name: &str, glyph: &str| {
-            let target = target.filter(|m| self.rules.allows_month(m));
+            // The route reads years 0000-9999 only.
+            let target =
+                target.filter(|m| (0..=9999).contains(&m.year()) && self.rules.allows_month(m));
             html! {
                 button type="button" class="autumn-datepicker-nav" data-nav=(name)
                     aria-label=(label)
@@ -212,7 +229,7 @@ impl<'a> Calendar<'a> {
                 data-max=[self.rules.max_date().map(|d| d.to_string())] {
                 div class="autumn-datepicker-header" {
                     (nav(self.locale.previous_month(), self.month.previous(), "previous", "‹"))
-                    div class="autumn-datepicker-heading" id=(heading) aria-live="polite" {
+                    div class="autumn-datepicker-heading" id=(heading) {
                         (self.locale.title(&self.month))
                     }
                     (nav(self.locale.next_month(), self.month.next(), "next", "›"))
@@ -236,7 +253,7 @@ impl<'a> Calendar<'a> {
                             tr {
                                 @for cell in week {
                                     @match cell {
-                                        Some(day) => (self.day(day, stop, marks_today)),
+                                        Some(day) => (self.day(day, stop)),
                                         None => td class="autumn-datepicker-blank" {},
                                     }
                                 }
@@ -249,7 +266,7 @@ impl<'a> Calendar<'a> {
     }
 
     /// One day cell.
-    fn day(&self, day: NaiveDate, stop: Option<NaiveDate>, marks_today: bool) -> Markup {
+    fn day(&self, day: NaiveDate, stop: Option<NaiveDate>) -> Markup {
         let enabled = self.rules.is_enabled(day);
         let selected = self.is_selected(day);
         let is_today = self.today == Some(day);
@@ -274,7 +291,7 @@ impl<'a> Calendar<'a> {
             td class=(class) data-date=(day.to_string())
                 tabindex=(if stop == Some(day) { "0" } else { "-1" })
                 aria-selected=[selected.then_some("true")]
-                aria-current=[(is_today && marks_today).then_some("date")]
+                aria-current=[is_today.then_some("date")]
                 aria-disabled=[(!enabled).then_some("true")] {
                 (day.day())
             }
@@ -365,7 +382,10 @@ mod tests {
             "{html}"
         );
         assert!(html.contains(r#"id="due-calendar-heading""#), "{html}");
-        assert!(html.contains(r#"aria-live="polite""#), "{html}");
+        assert!(
+            !html.contains("aria-live"),
+            "the live region is outside the swap: {html}"
+        );
         assert!(html.contains(">November 2026<"), "{html}");
         assert!(
             html.contains(r#"data-autumn-roving="[data-date]""#),
@@ -406,8 +426,8 @@ mod tests {
         );
         assert!(html.contains("autumn-datepicker-day--today"), "{html}");
         assert!(
-            !html.contains("aria-current"),
-            "only one marked day: {html}"
+            html.contains(r#"data-date="2026-11-03" tabindex="-1" aria-current="date""#),
+            "today stays current: {html}"
         );
     }
 
@@ -475,6 +495,53 @@ mod tests {
             html.contains("dp-min=2026-11-01"),
             "rules are in the URL: {html}"
         );
+    }
+
+    /// Each cell of each 2024–2027 month shows the rules: `aria-disabled`
+    /// if and only if the day is not enabled. `min` and `max` are in the
+    /// middle of a month.
+    #[test]
+    fn each_cell_shows_the_rules() {
+        let rules = DateRules::new()
+            .min(date(2024, 2, 14))
+            .max(date(2027, 10, 17))
+            .disable_weekends()
+            .disable_date(date(2026, 12, 25));
+        let locale = CalendarLocale::english();
+        for year in 2024..=2027 {
+            for month in 1..=12 {
+                for ws in [Weekday::Sun, Weekday::Mon, Weekday::Sat] {
+                    let grid = MonthGrid::new(year, month, ws).expect("month");
+                    let html = render(&Calendar::new("due", grid, &rules, &locale));
+                    for day in grid.weeks().iter().flatten().flatten() {
+                        let cell = html
+                            .split(&format!(r#"data-date="{day}""#))
+                            .nth(1)
+                            .and_then(|rest| rest.split('>').next())
+                            .expect("a cell");
+                        assert_eq!(
+                            cell.contains(r#"aria-disabled="true""#),
+                            !rules.is_enabled(*day),
+                            "{day}: {cell}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn no_month_button_leaves_the_years_that_the_route_reads() {
+        let (rules, locale) = (DateRules::new(), CalendarLocale::english());
+        for (y, m) in [(0, 1), (9999, 12)] {
+            let month = MonthGrid::new(y, m, Weekday::Sun).expect("month");
+            let html = render(&Calendar::new("due", month, &rules, &locale));
+            assert_eq!(html.matches(" disabled").count(), 1, "{y}-{m}: {html}");
+            assert!(
+                !html.contains("dp-month=-") && !html.contains("dp-month=10000"),
+                "{html}"
+            );
+        }
     }
 
     #[test]

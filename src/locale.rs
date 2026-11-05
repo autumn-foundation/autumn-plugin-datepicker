@@ -12,6 +12,27 @@ use crate::grid::MonthGrid;
 
 type Text = Cow<'static, str>;
 
+/// A label that [`CalendarLocale::label`] sets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Label {
+    /// The previous-month button.
+    PreviousMonth,
+    /// The next-month button.
+    NextMonth,
+    /// The button that opens the calendar.
+    ChooseDate,
+    /// The button that opens the time list.
+    ChooseTime,
+    /// The calendar popover.
+    Calendar,
+    /// The time list.
+    Times,
+    /// The first input of a range.
+    RangeStart,
+    /// The second input of a range.
+    RangeEnd,
+}
+
 /// The text and the week start of a calendar.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CalendarLocale {
@@ -92,23 +113,44 @@ impl CalendarLocale {
 
     /// Set the twelve month names, January first.
     #[must_use]
-    pub fn month_names(mut self, names: [&'static str; 12]) -> Self {
-        self.months = names.map(Cow::Borrowed);
+    pub fn month_names<S: Into<Text>>(mut self, names: [S; 12]) -> Self {
+        self.months = names.map(Into::into);
         self
     }
 
     /// Set the weekday names, Monday first: the long name, then the short.
     #[must_use]
-    pub fn weekday_names(mut self, long: [&'static str; 7], short: [&'static str; 7]) -> Self {
-        self.weekdays = long.map(Cow::Borrowed);
-        self.weekdays_short = short.map(Cow::Borrowed);
+    pub fn weekday_names<S: Into<Text>, T: Into<Text>>(
+        mut self,
+        long: [S; 7],
+        short: [T; 7],
+    ) -> Self {
+        self.weekdays = long.map(Into::into);
+        self.weekdays_short = short.map(Into::into);
         self
     }
 
     /// Set the heading template. `{month}` and `{year}` mark the parts.
     #[must_use]
-    pub fn title_template(mut self, template: &'static str) -> Self {
-        self.title = Cow::Borrowed(template);
+    pub fn title_template(mut self, template: impl Into<Text>) -> Self {
+        self.title = template.into();
+        self
+    }
+
+    /// Set one label.
+    #[must_use]
+    pub fn label(mut self, which: Label, text: impl Into<Text>) -> Self {
+        let slot = match which {
+            Label::PreviousMonth => &mut self.previous_month,
+            Label::NextMonth => &mut self.next_month,
+            Label::ChooseDate => &mut self.choose_date,
+            Label::ChooseTime => &mut self.choose_time,
+            Label::Calendar => &mut self.calendar,
+            Label::Times => &mut self.times,
+            Label::RangeStart => &mut self.range_start,
+            Label::RangeEnd => &mut self.range_end,
+        };
+        *slot = text.into();
         self
     }
 
@@ -300,6 +342,27 @@ mod tests {
         assert_eq!(german.title(&march), "März 2026");
         let year_first = CalendarLocale::english().title_template("{year}年{month}");
         assert_eq!(year_first.title(&march), "2026年March");
+    }
+
+    #[test]
+    fn each_label_can_change() {
+        let l = CalendarLocale::english()
+            .label(Label::PreviousMonth, "Mois précédent")
+            .label(Label::NextMonth, String::from("Mois suivant"))
+            .label(Label::ChooseDate, "Choisir une date")
+            .label(Label::ChooseTime, "Choisir une heure")
+            .label(Label::Calendar, "Calendrier")
+            .label(Label::Times, "Heures")
+            .label(Label::RangeStart, "Début")
+            .label(Label::RangeEnd, "Fin");
+        assert_eq!(l.previous_month(), "Mois précédent");
+        assert_eq!(l.next_month(), "Mois suivant");
+        assert_eq!(l.choose_date(), "Choisir une date");
+        assert_eq!(l.choose_time(), "Choisir une heure");
+        assert_eq!(l.calendar(), "Calendrier");
+        assert_eq!(l.times(), "Heures");
+        assert_eq!(l.range_start(), "Début");
+        assert_eq!(l.range_end(), "Fin");
     }
 
     #[test]

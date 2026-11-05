@@ -1,7 +1,8 @@
 # Date Picker
 
-`autumn-datepicker-plugin` adds four pickers. Each one is a native input
-first. JavaScript adds a calendar or a time list.
+`autumn-datepicker-plugin` adds four pickers. Each picker is a native input
+that works with JavaScript off. With JavaScript, a button opens a calendar or
+a time list.
 
 | Picker | Native input | Popover |
 |---|---|---|
@@ -48,7 +49,9 @@ The framework writes the label, the hint, the errors and the ARIA links.
 The `FieldOptions` passthrough (`data-*`, `hx-*`, `required`) goes on the
 native input.
 
-Do not start a field name with `dp-`. The month route uses that prefix.
+A field name has 1 to 64 characters of `A-Z a-z 0-9 _ . : - [ ]`, and does
+not start with `dp-`. The month route uses that prefix. For another name,
+the picker shows the native input only.
 
 ## Limits and disabled days
 
@@ -68,23 +71,25 @@ let picker = DatePicker::new().rules(rules);
 - The input gets `min` and `max`, so the browser also checks them.
 - A month button is `disabled` when the month is outside `min..=max`.
 - The rules go into the month route URL. At most 400 disabled dates fit
-  (`MAX_DISABLED_DATES`). For more, check the dates on the server.
+  (`MAX_DISABLED_DATES`). `disable_date` panics past that limit.
+  `try_disable_dates` returns an error, for a list from a database.
+- `min` after `max` panics.
 
 The rules help the user. They are not validation. Validate the posted value
 on the server.
 
 ## Today
 
-Pass today in the user zone:
+Give the user zone. Then today is the date in that zone:
 
 ```rust
-async fn edit(clock: Clock, tz: TimeZone) -> Markup {
-    let today = clock.now().with_timezone(&*tz).date_naive();
-    date_picker(&cs, "due", "Due", &DatePicker::new().today(today), &FieldOptions::new())
+async fn edit(tz: TimeZone) -> Markup {
+    date_picker(&cs, "due", "Due", &DatePicker::new().time_zone(*tz), &FieldOptions::new())
 }
 ```
 
-Without `today`, the picker uses the ambient clock in UTC.
+`DatePicker::today(date)` sets today directly. Without a zone and without
+`today`, the picker uses the ambient clock in UTC.
 
 ## Locale
 
@@ -96,6 +101,9 @@ first.
 let locale = CalendarLocale::english().week_start(chrono::Weekday::Mon);
 let picker = DatePicker::new().locale(locale);
 ```
+
+`CalendarLocale::label(Label::NextMonth, "…")` sets one button or popover
+label.
 
 With the `i18n` feature, read the text from the app bundle:
 
@@ -129,18 +137,22 @@ Without a bundle, it uses `DatepickerPlugin::locale`.
 
 ```rust
 let picker = TimePicker::new()
-    .range(NaiveTime::from_hms_opt(9, 0, 0).unwrap(), NaiveTime::from_hms_opt(17, 0, 0).unwrap())
+    .between(NaiveTime::from_hms_opt(9, 0, 0).unwrap(), NaiveTime::from_hms_opt(17, 0, 0).unwrap())
     .step_minutes(15)
     .label_format("%-I:%M %p");
 ```
 
 The list is a `role="listbox"` on the keyboard core. The input value stays
-`HH:MM`.
+`HH:MM`. Only `between` sets `min` and `max` on the input. `between` panics
+when the first slot is after the last: a list cannot go past midnight. An
+invalid `label_format` panics.
 
 ## Date and time zones
 
-`DateTimePicker` writes the `datetime-local` shape: `YYYY-MM-DDTHH:MM`, and
-`:SS` only when the seconds are not zero. It never writes an offset.
+`DateTimePicker` writes the `datetime-local` shape: `YYYY-MM-DDTHH:MM`, then
+`:SS` and the milliseconds only when they are not zero. It never writes an
+offset. HTML allows at most three fraction digits, so the picker drops the
+time below one millisecond.
 
 | Field type | Read the post with |
 |---|---|
@@ -150,7 +162,7 @@ The list is a `role="listbox"` on the keyboard core. The input value stays
 | `DateTime<Utc>` shown in a user zone | `value::parse_in_zone(raw, tz)` |
 
 For a user zone, set `DateTimePicker::time_zone(tz)`. The input shows the
-wall clock in `tz`.
+wall clock in `tz`. `DateTimePicker::locale` sets the text of both parts.
 
 A DST fall-back change repeats one hour. `datetime-local` has no offset, so
 the later instant of that hour reads back as the earlier one. A wall clock
@@ -172,8 +184,9 @@ The two inputs post `stay=2026-11-05&stay=2026-11-12`. `DateRange` reads the
 repeated key. For an optional range, use
 `#[serde(default, deserialize_with = "DateRange::deserialize_option")]`.
 
-In the calendar, the first click sets the start. The second click sets the
-end and closes the popover.
+In the calendar, the first pick marks the start. The second pick writes both
+inputs and closes the popover. Escape after the first pick keeps the old
+range.
 
 ## Keyboard
 
@@ -183,10 +196,10 @@ The calendar follows the APG date picker dialog.
 |---|---|
 | ArrowLeft, ArrowRight | Previous or next day. At the month edge, the next month loads. |
 | ArrowUp, ArrowDown | Same day, previous or next week |
-| Home, End | First or last day of the week |
+| Home, End | First or last day of the week, in this month |
 | PageUp, PageDown | Same day, previous or next month. The day clamps to the month length. |
 | Shift+PageUp, Shift+PageDown | Same day, previous or next year |
-| Enter, Space | Pick the day |
+| Enter, Space | Pick the day. A held key picks one time. |
 | Escape | Close the popover. Focus goes to the toggle. |
 | Tab | Move between the month buttons and the grid. Focus that leaves closes the popover. |
 
@@ -194,6 +207,10 @@ The keyboard core gives the roving tab stop, ArrowLeft/ArrowRight inside
 the grid and `aria-expanded`. The core has no 2-D grid mode, so
 `datepicker.js` handles the other keys. It calls `preventDefault`, so the
 core skips them. See [ADR 0001](../adr/0001-server-grid-and-keyboard-split.md).
+
+A key during a month request moves on from the date that the request asks
+for. A live region outside the calendar says the new month. Without htmx,
+the month buttons are disabled.
 
 ## Inline calendar
 
@@ -216,7 +233,10 @@ core skips them. See [ADR 0001](../adr/0001-server-grid-and-keyboard-split.md).
 | `dp-x` | Disabled dates, comma-separated |
 | `<field name>` | The input value or values |
 
-A bad value gives 400. The route keeps no state.
+A bad value, or a query longer than 16 KiB (`MAX_QUERY_BYTES`), gives 400.
+The error names the key, not the value. The route keeps no state. The
+response has `Cache-Control: private, max-age=300` and
+`Vary: Accept-Language, Cookie`.
 
 ## CSS hooks
 
@@ -231,7 +251,8 @@ A bad value gives 400. The route keeps no state.
 | `autumn-datepicker-time` | A time option |
 
 `--autumn-datepicker-cell` sets the cell size. The CSS uses only the public
-Autumn tokens, so the dark scheme works.
+Autumn tokens, so the dark scheme works. In forced-colors mode, the selected
+day and the selected time use the system highlight colors.
 
 ## Tests
 

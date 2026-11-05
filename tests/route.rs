@@ -117,6 +117,15 @@ fn a_bad_query_is_an_error() {
 }
 
 #[test]
+fn a_long_query_is_an_error() {
+    let long = format!(
+        "dp-id=due&dp-mode=date&dp-ws=7&dp-month=2026-11&due={}",
+        "x".repeat(autumn_datepicker_plugin::route::MAX_QUERY_BYTES)
+    );
+    assert!(month_markup(&long, &CalendarLocale::english()).is_err());
+}
+
+#[test]
 fn an_unparsable_field_value_selects_nothing() {
     let html = render("dp-id=due&dp-mode=date&dp-ws=7&dp-month=2026-11&due=not-a-date");
     assert!(!html.contains("aria-selected"), "{html}");
@@ -140,8 +149,15 @@ async fn the_plugin_serves_the_route_and_the_assets() {
         ok.header("content-type")
     );
 
+    assert_eq!(ok.header("vary"), Some("Accept-Language, Cookie"));
+
     let bad = client.get(&format!("{MONTH_PATH}?dp-id=due")).send().await;
     bad.assert_status(400);
+    assert!(
+        !bad.text().contains("due"),
+        "the error does not echo input: {}",
+        bad.text()
+    );
 
     for path in autumn_datepicker_plugin::pack()
         .stylesheet_urls()

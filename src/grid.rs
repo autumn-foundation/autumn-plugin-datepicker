@@ -5,7 +5,8 @@
 
 use chrono::{Datelike, Months, NaiveDate, Weekday};
 
-/// The number of days in `month` of `year` (proleptic Gregorian).
+/// The number of days in `month` of `year`. The Gregorian rules apply to
+/// each year.
 ///
 /// Returns 0 when `month` is not `1..=12`.
 #[must_use]

@@ -9,8 +9,8 @@
 use std::time::Duration;
 
 use autumn_datepicker_plugin::{
-    DatePicker, DateRange, DateRangePicker, DateTimePicker, TimePicker, date_picker,
-    date_range_picker, datetime_picker, pack, time_picker,
+    CalendarLocale, DatePicker, DateRange, DateRangePicker, DateRules, DateTimePicker, TimePicker,
+    date_picker, date_range_picker, datetime_picker, pack, time_picker,
 };
 use autumn_web::form::{Changeset, FieldOptions};
 use autumn_web::plugin_conformance::widgets::browser::run_widget_browser_conformance;
@@ -31,6 +31,8 @@ struct Form {
     at: NaiveTime,
     starts_at: chrono::NaiveDateTime,
     stay: Option<DateRange>,
+    span: Option<DateRange>,
+    work: NaiveDate,
 }
 
 #[get("/")]
@@ -41,6 +43,8 @@ async fn index() -> Markup {
         at: NaiveTime::from_hms_opt(9, 0, 0).expect("t"),
         starts_at: date(2026, 11, 5).and_hms_opt(14, 0, 0).expect("t"),
         stay: None,
+        span: None,
+        work: date(2026, 3, 6),
     });
     let today = date(2026, 3, 1);
     let picker = DatePicker::new().today(today);
@@ -64,9 +68,17 @@ async fn index() -> Markup {
                         (time_picker(&changeset, "at", "At",
                             &TimePicker::new().step_minutes(30), &FieldOptions::new()))
                         (datetime_picker(&changeset, "starts_at", "Starts",
-                            &DateTimePicker::new().date(picker.clone()), &FieldOptions::new()))
+                            &DateTimePicker::new().calendar(picker.clone()), &FieldOptions::new()))
                         (date_range_picker(&changeset, "stay", "Stay",
-                            &DateRangePicker::new().date(picker), &FieldOptions::new()))
+                            &DateRangePicker::new().calendar(picker.clone()), &FieldOptions::new()))
+                        (date_range_picker(&changeset, "span", "Span",
+                            &DateRangePicker::new().calendar(picker.inline()), &FieldOptions::new()))
+                        (date_picker(&changeset, "work", "Work day",
+                            &DatePicker::new()
+                                .rules(DateRules::new().min(date(2026, 3, 4)).max(date(2026, 3, 27)).disable_weekends())
+                                .locale(CalendarLocale::english().week_start(chrono::Weekday::Mon))
+                                .today(today),
+                            &FieldOptions::new()))
                         button type="submit" { "Save" }
                     }
                 }
@@ -375,11 +387,16 @@ async fn two_clicks_pick_a_range() {
     page.evaluate("document.querySelector('#stay-dialog [data-date=\"2026-03-12\"]').click()")
         .await
         .expect("click");
+    // The first click marks the start only. The inputs change on the end click.
     wait_for(
         &page,
-        "document.getElementById('stay-start').value === '2026-03-12'",
+        "document.querySelector('#stay-dialog [data-date=\"2026-03-12\"]').getAttribute('aria-selected') === 'true'",
     )
     .await;
+    assert_eq!(
+        eval_string(&page, "document.getElementById('stay-start').value").await,
+        ""
+    );
     assert!(
         eval_string(
             &page,
@@ -435,4 +452,243 @@ async fn with_javascript_off_the_native_input_is_alone() {
     assert_eq!(visible, "false");
     let input = eval_string(&page, "document.getElementById('due').type").await;
     assert_eq!(input, "date");
+}
+
+#[tokio::test]
+#[ignore = "requires Chromium"]
+async fn escape_after_the_first_range_click_keeps_the_old_range() {
+    let (_runner, page) = Box::pin(app()).await;
+    page.evaluate(
+        "document.getElementById('stay-start').value = '2026-03-02'; \
+         document.getElementById('stay-end').value = '2026-03-04'",
+    )
+    .await
+    .expect("set");
+    open(&page, "stay").await;
+    page.evaluate("document.querySelector('#stay-dialog [data-date=\"2026-03-12\"]').click()")
+        .await
+        .expect("click");
+    page.press("Escape").await.expect("key");
+    wait_for(
+        &page,
+        "!document.getElementById('stay-dialog').matches(':popover-open')",
+    )
+    .await;
+    assert_eq!(
+        eval_string(&page, "document.getElementById('stay-start').value").await,
+        "2026-03-02"
+    );
+    assert_eq!(
+        eval_string(&page, "document.getElementById('stay-end').value").await,
+        "2026-03-04"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires Chromium"]
+async fn home_and_end_stay_in_the_month() {
+    let (_runner, page) = Box::pin(app()).await;
+    page.evaluate("document.getElementById('due').value = '2026-01-03'")
+        .await
+        .expect("set");
+    open(&page, "due").await;
+    wait_focused(&page, "2026-01-03").await;
+    // The first row is 28 December to 3 January. Home goes to 1 January.
+    page.press("Home").await.expect("key");
+    assert_eq!(focused_date(&page).await, "2026-01-01");
+    page.press("End").await.expect("key");
+    assert_eq!(focused_date(&page).await, "2026-01-03");
+}
+
+#[tokio::test]
+#[ignore = "requires Chromium"]
+async fn two_fast_page_downs_move_two_months() {
+    let (_runner, page) = Box::pin(app()).await;
+    open(&page, "due").await;
+    wait_focused(&page, "2026-03-05").await;
+    page.evaluate(
+        "for (let i = 0; i < 2; i++) document.activeElement.dispatchEvent(new KeyboardEvent('keydown', \
+         { key: 'PageDown', bubbles: true, cancelable: true }))",
+    )
+    .await
+    .expect("keys");
+    wait_focused(&page, "2026-05-05").await;
+    let heading = eval_string(
+        &page,
+        "document.getElementById('due-calendar-heading').textContent",
+    )
+    .await;
+    assert_eq!(heading, "May 2026");
+}
+
+#[tokio::test]
+#[ignore = "requires Chromium"]
+async fn a_month_change_updates_the_live_region() {
+    let (_runner, page) = Box::pin(app()).await;
+    open(&page, "due").await;
+    wait_focused(&page, "2026-03-05").await;
+    page.press("PageDown").await.expect("key");
+    wait_focused(&page, "2026-04-05").await;
+    wait_for(
+        &page,
+        "document.querySelector('#due-dialog .autumn-datepicker-status').textContent === 'April 2026'",
+    )
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "requires Chromium"]
+async fn an_inline_range_across_months_stays_on_the_end_month() {
+    let (_runner, page) = Box::pin(app()).await;
+    let pick =
+        |iso: &str| format!("document.querySelector('#span-field [data-date=\"{iso}\"]').click()");
+    page.evaluate(pick("2026-03-20")).await.expect("click");
+    page.evaluate("document.querySelector('#span-field [data-nav=\"next\"]').click()")
+        .await
+        .expect("next");
+    wait_for(
+        &page,
+        "document.getElementById('span-calendar-heading').textContent === 'April 2026'",
+    )
+    .await;
+    page.evaluate(pick("2026-04-10")).await.expect("click");
+    wait_for(
+        &page,
+        "document.getElementById('span-end').value === '2026-04-10'",
+    )
+    .await;
+    assert_eq!(
+        eval_string(&page, "document.getElementById('span-start').value").await,
+        "2026-03-20"
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(
+        eval_string(
+            &page,
+            "document.getElementById('span-calendar-heading').textContent"
+        )
+        .await,
+        "April 2026"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires Chromium"]
+async fn without_htmx_the_calendar_still_takes_focus() {
+    let (_runner, page) = Box::pin(app()).await;
+    page.evaluate("window.htmx = undefined; document.getElementById('due').value = '2026-07-14'")
+        .await
+        .expect("set");
+    open(&page, "due").await;
+    wait_for(
+        &page,
+        "document.activeElement && document.activeElement.matches('#due-dialog [data-date]')",
+    )
+    .await;
+    let disabled = eval_string(
+        &page,
+        "String(document.querySelector('#due-dialog [data-nav=\"next\"]').disabled)",
+    )
+    .await;
+    assert_eq!(disabled, "true", "a month button without htmx does nothing");
+}
+
+#[tokio::test]
+#[ignore = "requires Chromium"]
+async fn the_script_installs_once() {
+    let (_runner, page) = Box::pin(app()).await;
+    page.evaluate(
+        "new Promise(r => { const s = document.createElement('script'); \
+         s.src = document.querySelector('script[src*=\"datepicker\"]').src; \
+         s.onload = r; document.head.appendChild(s); })",
+    )
+    .await
+    .expect("load again");
+    open(&page, "stay").await;
+    page.evaluate("document.querySelector('#stay-dialog [data-date=\"2026-03-12\"]').click()")
+        .await
+        .expect("click");
+    // A second copy would take the click as the end too and close the popover.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(
+        eval_string(
+            &page,
+            "String(document.getElementById('stay-dialog').matches(':popover-open'))"
+        )
+        .await,
+        "true"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires Chromium"]
+async fn keys_skip_disabled_days_and_stop_at_the_limits() {
+    let (_runner, page) = Box::pin(app()).await;
+    open(&page, "work").await;
+    wait_focused(&page, "2026-03-06").await;
+    // Friday to Monday: the core skips the weekend.
+    page.press("ArrowRight").await.expect("key");
+    assert_eq!(focused_date(&page).await, "2026-03-09");
+    page.press("ArrowLeft").await.expect("key");
+    assert_eq!(focused_date(&page).await, "2026-03-06");
+    // Up goes to 27 February, before min: focus stops at min.
+    page.press("ArrowUp").await.expect("key");
+    assert_eq!(focused_date(&page).await, "2026-03-04");
+    // A Monday start: the row is 2 to 8 March. Home clamps to min. End skips
+    // the weekend back to Friday.
+    page.press("Home").await.expect("key");
+    assert_eq!(focused_date(&page).await, "2026-03-04");
+    page.press("End").await.expect("key");
+    assert_eq!(focused_date(&page).await, "2026-03-06");
+    // PageDown goes to 6 April, after max: focus stops at max, in this month.
+    page.press("PageDown").await.expect("key");
+    assert_eq!(focused_date(&page).await, "2026-03-27");
+    let heading = eval_string(
+        &page,
+        "document.getElementById('work-calendar-heading').textContent",
+    )
+    .await;
+    assert_eq!(heading, "March 2026");
+}
+
+#[tokio::test]
+#[ignore = "requires Chromium"]
+async fn the_keyboard_alone_picks_a_range() {
+    let (_runner, page) = Box::pin(app()).await;
+    open(&page, "stay").await;
+    // No value: today (1 March) has the tab stop.
+    wait_focused(&page, "2026-03-01").await;
+    page.press("Enter").await.expect("key");
+    page.press("ArrowRight").await.expect("key");
+    page.press("ArrowRight").await.expect("key");
+    page.press("Enter").await.expect("key");
+    wait_for(
+        &page,
+        "document.getElementById('stay-start').value === '2026-03-01'",
+    )
+    .await;
+    wait_for(
+        &page,
+        "document.getElementById('stay-end').value === '2026-03-03'",
+    )
+    .await;
+    wait_for(
+        &page,
+        "!document.getElementById('stay-dialog').matches(':popover-open')",
+    )
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "requires Chromium"]
+async fn tab_out_of_the_popover_closes_it() {
+    let (_runner, page) = Box::pin(app()).await;
+    open(&page, "due").await;
+    wait_focused(&page, "2026-03-05").await;
+    page.press("Tab").await.expect("key");
+    wait_for(
+        &page,
+        "!document.getElementById('due-dialog').matches(':popover-open')",
+    )
+    .await;
 }

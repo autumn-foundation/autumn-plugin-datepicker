@@ -53,15 +53,31 @@ impl DateRules {
     }
 
     /// The first day a user can pick.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `date` is after [`max`](Self::max).
     #[must_use]
-    pub const fn min(mut self, date: NaiveDate) -> Self {
+    pub fn min(mut self, date: NaiveDate) -> Self {
+        assert!(
+            self.max.is_none_or(|max| date <= max),
+            "DateRules::min {date} is after max"
+        );
         self.min = Some(date);
         self
     }
 
     /// The last day a user can pick.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `date` is before [`min`](Self::min).
     #[must_use]
-    pub const fn max(mut self, date: NaiveDate) -> Self {
+    pub fn max(mut self, date: NaiveDate) -> Self {
+        assert!(
+            self.min.is_none_or(|min| date >= min),
+            "DateRules::max {date} is before min"
+        );
         self.max = Some(date);
         self
     }
@@ -105,6 +121,30 @@ impl DateRules {
     #[must_use]
     pub fn disable_dates(self, dates: impl IntoIterator<Item = NaiveDate>) -> Self {
         dates.into_iter().fold(self, Self::disable_date)
+    }
+
+    /// Disable each date in `dates`, for a list from a database.
+    ///
+    /// # Errors
+    ///
+    /// [`RuleError`] when the rules then hold more than
+    /// [`MAX_DISABLED_DATES`] dates. The rules do not change.
+    pub fn try_disable_dates(
+        mut self,
+        dates: impl IntoIterator<Item = NaiveDate>,
+    ) -> Result<Self, RuleError> {
+        let before = self.dates.clone();
+        for date in dates {
+            self.dates.insert(date);
+            if self.dates.len() > MAX_DISABLED_DATES {
+                self.dates = before;
+                return Err(RuleError {
+                    key: "x",
+                    reason: "too many dates",
+                });
+            }
+        }
+        Ok(self)
     }
 
     /// The first day a user can pick, if set.
@@ -182,6 +222,14 @@ impl DateRules {
             max: date("max")?,
             ..Self::new()
         };
+        if let (Some(min), Some(max)) = (rules.min, rules.max)
+            && min > max
+        {
+            return Err(RuleError {
+                key: "max",
+                reason: "is before min",
+            });
+        }
         for digit in value("off").unwrap_or_default().chars() {
             let weekday = digit
                 .to_digit(10)
@@ -193,6 +241,14 @@ impl DateRules {
             rules = rules.disable_weekday(weekday);
         }
         if let Some(list) = value("x") {
+            // Count the items, not the distinct dates: a list of one date
+            // repeated is long work too.
+            if list.split(',').count() > MAX_DISABLED_DATES {
+                return Err(RuleError {
+                    key: "x",
+                    reason: "too many dates",
+                });
+            }
             for item in list.split(',') {
                 let day = parse_iso_date(item).ok_or(RuleError {
                     key: "x",
@@ -256,7 +312,7 @@ mod tests {
     fn no_rules_enable_each_day() {
         let rules = DateRules::new();
         assert!(rules.is_enabled(date(2026, 11, 5)));
-        assert!(rules.to_query().is_empty());
+        assert_eq!(rules.to_query().len(), 0, "no rules, no query pairs");
     }
 
     #[test]
@@ -355,6 +411,72 @@ mod tests {
         let _ = DateRules::new().disable_dates(
             (0..=MAX_DISABLED_DATES as u64).map(|i| date(2020, 1, 1) + chrono::Days::new(i)),
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "after max")]
+    fn min_after_max_panics() {
+        let _ = DateRules::new()
+            .max(date(2026, 12, 1))
+            .min(date(2026, 12, 10));
+    }
+
+    #[test]
+    #[should_panic(expected = "before min")]
+    fn max_before_min_panics() {
+        let _ = DateRules::new()
+            .min(date(2026, 12, 10))
+            .max(date(2026, 12, 1));
+    }
+
+    #[test]
+    fn a_query_with_min_after_max_is_an_error() {
+        let err = DateRules::from_query(|k| match k {
+            "min" => Some("2026-12-10"),
+            "max" => Some("2026-12-01"),
+            _ => None,
+        });
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn a_repeated_date_counts_toward_the_query_limit() {
+        let list = vec!["2026-11-05"; MAX_DISABLED_DATES + 1].join(",");
+        let err = DateRules::from_query(|k| (k == "x").then_some(list.as_str()));
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn try_disable_dates_keeps_the_rules_on_error() {
+        let many = (0..=MAX_DISABLED_DATES as u64).map(|i| date(2020, 1, 1) + chrono::Days::new(i));
+        let rules = DateRules::new().disable_date(date(2019, 1, 1));
+        let err = rules.clone().try_disable_dates(many);
+        assert!(err.is_err());
+        let ok = rules.try_disable_dates([date(2026, 12, 25)]).expect("fits");
+        assert!(!ok.is_enabled(date(2026, 12, 25)));
+        assert!(!ok.is_enabled(date(2019, 1, 1)));
+    }
+
+    /// Spec invariant 5, for each day of 1900–2100: a day is enabled if and
+    /// only if `min <= day <= max`, its weekday is not disabled, and it is
+    /// not in the list.
+    #[test]
+    fn invariant_5_holds_exhaustively() {
+        let (min, max) = (date(1950, 3, 15), date(2080, 9, 10));
+        let listed = [date(2000, 2, 29), date(2026, 12, 25)];
+        let rules = DateRules::new()
+            .min(min)
+            .max(max)
+            .disable_weekday(Weekday::Wed)
+            .disable_weekends()
+            .disable_dates(listed);
+        let mut day = date(1900, 1, 1);
+        while day <= date(2100, 12, 31) {
+            let weekday_off = matches!(day.weekday(), Weekday::Wed | Weekday::Sat | Weekday::Sun);
+            let expected = min <= day && day <= max && !weekday_off && !listed.contains(&day);
+            assert_eq!(rules.is_enabled(day), expected, "{day}");
+            day = day.succ_opt().expect("next day");
+        }
     }
 
     #[test]

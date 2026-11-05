@@ -58,13 +58,13 @@ Question: "How can a date picker fail?" Each answer gives a guard.
 | A user picks a date outside `min`/`max`. | The cell gets `aria-disabled="true"`. The input keeps `min` and `max`, so the browser also checks it. The app still validates on the server. |
 | The previous-month button goes to a month with no valid day. | The button is `disabled` when the month is before `min` or after `max`. |
 | A forged query string breaks the route. | The route parses each value. A bad value gives 400. Maud escapes all text. The id has a strict charset. |
-| A long disabled-date list makes a long URL. | At most 400 dates in a query. The docs say so. |
-| JS date math slips one day across DST. | The pack JS uses `Date.UTC` only. A browser test runs in `America/New_York` across the DST week. |
+| A long disabled-date list makes a long URL. | At most 400 dates in a query, counted with repeats. At most 16 KiB of query. |
+| JS date math slips one day across DST. | The pack JS uses UTC methods only (`setUTCFullYear`, `getUTC*`). A browser test runs in `America/New_York` across the DST week. |
 | PageUp lands on 31 February. | The day clamps to the month length. A browser test checks 31 January to February. |
 | Focus is lost after an htmx swap. | The script keeps the target date and focuses it after the swap. A browser test checks it. |
 | The core moves Home/End to the first or last day of the month. | The pack script handles Home/End on the grid first and calls `preventDefault`. The core then skips the key. |
 | A popover opens with focus on the toggle. | On `toggle` to open, the script focuses the grid tab stop. |
-| The datetime value loses seconds or moves one hour. | A property test round-trips each value through the six deserializers and `parse_local_datetime`. |
+| The datetime value loses seconds or moves one hour. | A property test round-trips each value through the six deserializers and `parse_in_zone`, and through `parse_local_datetime` on whole minutes. |
 | A `DateTime<Utc>` value shows with a `Z` and the browser drops it. | The renderer writes the `datetime-local` shape. A test checks it. |
 | The no-JS page shows a dead button. | The toggle has `hidden`. A browser test with JS off checks it. |
 | A pack class collides with core, or CSS sets a public token. | `run_widget_conformance` in the test suite. |
@@ -75,8 +75,8 @@ Question: "How can a date picker fail?" Each answer gives a guard.
   `DateTime<Utc>` it is RFC 3339 with `Z`, which a `datetime-local` input
   rejects. The core keyboard list is 1-D. The browser conformance runner
   mounts only stories, not plugin routes. `FieldOptions` has no getter for
-  `min`/`max`, so the picker config holds its own rules. Verus is not on
-  this runner.
+  `min`/`max`, so the picker config holds its own rules. No Verus
+  toolchain is used.
 - **Red (feeling).** Users want the calendar to feel like other date pickers:
   arrows move days, PageUp moves months, Escape closes.
 - **Black (risk).** The pack script has key code, and the seam guide says
@@ -84,8 +84,8 @@ Question: "How can a date picker fail?" Each answer gives a guard.
   the keys that the core does not have. The ADR records this. A fall-back
   hour is ambiguous: `datetime-local` has no offset, so the later instant
   maps to the earlier one. The property test states this exactly.
-- **Yellow (value).** Apps get a first-party picker for free. Five of six
-  peer suites ship one. The grid and the rules are a pure, tested core.
+- **Yellow (value).** Apps get a first-party picker. Most styled component
+  suites ship one (autumn#3413). The grid and the rules are a pure, tested core.
 - **Green (alternatives).** Render all months in the page (rejected: large
   HTML). Build the grid in JS (rejected: two renderers, and DST bugs). Keep
   state on the server per picker (rejected: the query string is enough). A
@@ -95,13 +95,13 @@ Question: "How can a date picker fail?" Each answer gives a guard.
   values, the renderers, the route, conformance, the round trip and the
   browser keys. Run them and see them fail. GREEN: the smallest code.
   REFACTOR: clippy pedantic, shared helpers. Then the README, the guide, an
-  ADR, CI, review agents and fixes.
+  ADR, CI, a code review and fixes.
 
 ## Spec (the invariants)
 
-Verus is not available here, so an exhaustive test checks each invariant
-over 1900–2100 and the seven week starts. The test is the proof for that
-finite domain.
+An exhaustive test checks each invariant over 1900–2100: invariants 1–4 in
+`src/grid.rs` for the seven week starts, invariant 5 in `src/rules.rs` for
+each day. The test is the proof for that finite domain.
 
 1. Each day `1..=days_in_month` occurs exactly one time.
 2. The day `d` is at cell `offset + d - 1`, with

@@ -168,7 +168,7 @@ pub fn pack() -> WidgetPack {
                         "Starts at",
                         // Inline: Chromium gives `datetime-local` one Tab stop per
                         // part, and the inline grid adds stops for the Tab check.
-                        &DateTimePicker::new().date(DatePicker::new().inline().today(story_today())),
+                        &DateTimePicker::new().calendar(DatePicker::new().inline().today(story_today())),
                         &FieldOptions::new(),
                     )
                 }
@@ -181,7 +181,7 @@ pub fn pack() -> WidgetPack {
                         &example(),
                         "stay",
                         "Stay",
-                        &DateRangePicker::new().date(DatePicker::new().inline().today(story_today())),
+                        &DateRangePicker::new().calendar(DatePicker::new().inline().today(story_today())),
                         &FieldOptions::new(),
                     )
                 }
