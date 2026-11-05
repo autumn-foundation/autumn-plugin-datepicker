@@ -1,0 +1,233 @@
+/* autumn-datepicker-plugin. Public tokens only: no raw colors. */
+
+.autumn-datepicker-field {
+    --autumn-datepicker-cell: calc(var(--space-8) * var(--density-scale, 1));
+    --autumn-datepicker-gap: var(--space-1);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.autumn-datepicker-input {
+    flex: 1 1 12rem;
+    min-width: 0;
+}
+
+.autumn-datepicker-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--autumn-datepicker-cell);
+    height: var(--autumn-datepicker-cell);
+    padding: 0;
+    border: 1px solid var(--control-border);
+    border-radius: var(--radius);
+    color: var(--text);
+    background: var(--surface);
+}
+
+.autumn-datepicker-toggle[hidden] {
+    display: none;
+}
+
+.autumn-datepicker-toggle:hover {
+    background: var(--surface-muted);
+}
+
+.autumn-datepicker-toggle:focus-visible,
+.autumn-datepicker-nav:focus-visible,
+.autumn-datepicker-day:focus-visible,
+.autumn-datepicker-time:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+}
+
+/* A calendar and a clock, drawn with borders in the text color. */
+.autumn-datepicker-icon {
+    display: block;
+    box-sizing: border-box;
+    width: var(--space-4);
+    height: var(--space-4);
+    border: 2px solid currentColor;
+}
+
+.autumn-datepicker-icon--calendar {
+    border-top-width: 4px;
+    border-radius: var(--radius-sm);
+}
+
+.autumn-datepicker-icon--clock {
+    border-radius: var(--radius-full);
+}
+
+.autumn-datepicker-dialog {
+    padding: var(--space-3);
+}
+
+.autumn-datepicker-inline {
+    flex: 1 0 100%;
+}
+
+.autumn-datepicker-inline[hidden] {
+    display: none;
+}
+
+.autumn-datepicker-calendar {
+    display: inline-block;
+    color: var(--text);
+}
+
+.autumn-datepicker-inline .autumn-datepicker-calendar {
+    padding: var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+}
+
+.autumn-datepicker-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    margin-bottom: var(--space-2);
+}
+
+.autumn-datepicker-heading {
+    font-weight: var(--font-weight-semibold);
+}
+
+.autumn-datepicker-nav {
+    width: var(--autumn-datepicker-cell);
+    height: var(--autumn-datepicker-cell);
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    background: var(--surface);
+    font: inherit;
+    font-size: var(--font-size-lg);
+    line-height: 1;
+    cursor: pointer;
+}
+
+.autumn-datepicker-nav:hover:not(:disabled) {
+    background: var(--surface-muted);
+}
+
+.autumn-datepicker-nav:disabled {
+    color: var(--text-muted);
+    cursor: not-allowed;
+}
+
+.autumn-datepicker-grid {
+    border-collapse: separate;
+    border-spacing: var(--autumn-datepicker-gap);
+}
+
+.autumn-datepicker-weekday {
+    color: var(--text-muted);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-medium);
+    text-align: center;
+}
+
+.autumn-datepicker-day,
+.autumn-datepicker-blank {
+    width: var(--autumn-datepicker-cell);
+    height: var(--autumn-datepicker-cell);
+    padding: 0;
+    text-align: center;
+}
+
+.autumn-datepicker-day {
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-variant-numeric: tabular-nums;
+}
+
+.autumn-datepicker-day:hover:not([aria-disabled="true"]) {
+    background: var(--surface-muted);
+}
+
+.autumn-datepicker-day--today {
+    border-color: var(--primary);
+    font-weight: var(--font-weight-semibold);
+}
+
+.autumn-datepicker-day--in-range {
+    background: var(--primary-light);
+}
+
+.autumn-datepicker-day[aria-selected="true"],
+.autumn-datepicker-day[aria-selected="true"]:hover {
+    color: var(--on-primary);
+    background: var(--primary);
+}
+
+.autumn-datepicker-day--in-range[aria-selected="true"],
+.autumn-datepicker-day--in-range[aria-selected="true"]:hover {
+    color: var(--text);
+    background: var(--primary-light);
+}
+
+.autumn-datepicker-day[aria-disabled="true"] {
+    color: var(--text-muted);
+    text-decoration: line-through;
+    cursor: not-allowed;
+}
+
+.autumn-datepicker-times {
+    flex-direction: column;
+    max-height: 16rem;
+    overflow-y: auto;
+    padding: var(--space-1);
+}
+
+.autumn-datepicker-times:popover-open {
+    display: flex;
+}
+
+.autumn-datepicker-time {
+    padding: var(--space-1) var(--space-3);
+    border: 0;
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    background: transparent;
+    font: inherit;
+    font-variant-numeric: tabular-nums;
+    text-align: start;
+    cursor: pointer;
+}
+
+.autumn-datepicker-time:hover {
+    background: var(--surface-muted);
+}
+
+.autumn-datepicker-time[aria-selected="true"] {
+    color: var(--on-primary);
+    background: var(--primary);
+}
+
+.autumn-datepicker-range-inputs {
+    display: flex;
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+}
+
+.autumn-datepicker-range-part {
+    display: flex;
+    flex: 1 1 10rem;
+    flex-direction: column;
+    gap: var(--space-1);
+    font-size: var(--font-size-sm);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .autumn-datepicker-day,
+    .autumn-datepicker-time {
+        transition: background-color 120ms ease;
+    }
+}
