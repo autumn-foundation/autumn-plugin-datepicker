@@ -1,0 +1,52 @@
+[package]
+name = "autumn-datepicker-plugin"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97.0"
+description = "Date, time, date-time and date-range pickers for Autumn: a server-rendered calendar on native inputs"
+license = "Apache-2.0"
+repository = "https://github.com/autumn-foundation/autumn-plugin-datepicker"
+readme = "README.md"
+keywords = ["autumn", "datepicker", "calendar", "htmx", "widget"]
+categories = ["web-programming", "date-and-time"]
+include = ["src/**", "assets/**", "i18n/**", "README.md", "CHANGELOG.md", "LICENSE"]
+
+[dependencies]
+# `maud` for the widgets and stories, `htmx` for the month route. No `db`:
+# a picker needs no database, and an app with `db` still unifies it.
+autumn-web = { version = "0.10", default-features = false, features = ["maud", "htmx"] }
+# The same majors as autumn-web, so Cargo builds one copy of each.
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+chrono-tz = "0.10"
+maud = "0.27"
+serde = { version = "1", features = ["derive"] }
+# Reads a repeated query key (a date range). autumn-web uses the same crate
+# for form bodies.
+serde_html_form = { version = "0.4.1", default-features = false, features = ["de", "std"] }
+
+[dev-dependencies]
+proptest = "1.4"
+serde_html_form = { version = "0.4.1", default-features = false, features = ["de", "ser", "std"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+
+[features]
+default = []
+# Read month names, weekday names and the week start from the app i18n bundle.
+i18n = ["autumn-web/i18n"]
+# Browser tests (Chromium): keyboard, axe and widget pack conformance.
+system-tests = ["autumn-web/system-tests"]
+
+[package.metadata.docs.rs]
+features = ["i18n"]
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+unwrap_used = "warn"
