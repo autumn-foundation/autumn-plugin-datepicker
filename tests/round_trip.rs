@@ -184,8 +184,9 @@ proptest! {
             }
             LocalResult::None => prop_assert!(false, "an instant cannot be in a gap"),
         }
-        // `parse_local_datetime` reads minutes. It agrees on a whole minute.
-        if at.second() == 0 && at.nanosecond() == 0 {
+        // `parse_local_datetime` reads minutes. It agrees when the wall clock
+        // is a whole minute. An old offset can have seconds.
+        if wall.second() == 0 && wall.nanosecond() == 0 {
             prop_assert_eq!(parse_local_datetime(&value, tz).ok(), Some(read));
         }
     }
@@ -243,4 +244,21 @@ fn a_wall_clock_in_the_gap_does_not_read() {
     let ny = chrono_tz::America::New_York;
     assert_eq!(parse_in_zone("2026-03-08T02:30", ny), None);
     assert_eq!(parse_in_zone("garbage", ny), None);
+}
+
+/// An offset with seconds (Kolkata before 1941: +5:21:10 in chrono-tz) gives a wall
+/// clock with seconds. `parse_in_zone` reads it. `parse_local_datetime`
+/// reads whole minutes only, so it does not apply.
+#[test]
+fn an_offset_with_seconds_round_trips() {
+    let kolkata = chrono_tz::Asia::Kolkata;
+    let at = Utc
+        .with_ymd_and_hms(1903, 1, 6, 10, 19, 0)
+        .single()
+        .expect("t");
+    let zoned = picker().time_zone(kolkata);
+    let value = render_datetime(at, &zoned);
+    assert_eq!(value, "1903-01-06T15:40:10");
+    assert_eq!(parse_in_zone(&value, kolkata), Some(at));
+    assert!(parse_local_datetime(&value, kolkata).is_err());
 }
